@@ -1,0 +1,2 @@
+Flask==2.1.1
+google-cloud-firestore==2.3.4
