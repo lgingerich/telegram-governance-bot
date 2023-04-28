@@ -8,7 +8,7 @@ db = firestore.Client()
 
 def store_event(data):
     event_id = data["id"]
-    doc_ref = db.collection("events").document(event_id)
+    doc_ref = db.collection("snapshot_events").document(event_id)
     doc_ref.set(data)
     return event_id
 
