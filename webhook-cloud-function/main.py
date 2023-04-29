@@ -1,10 +1,16 @@
 import json
 import time
-from google.cloud import firestore
 import requests
+import openai
+from google.cloud import firestore, secretmanager
 from flask import jsonify
 
 db = firestore.Client()
+
+def get_secret_value(secret_name):
+    client = secretmanager.SecretManagerServiceClient()
+    response = client.access_secret_version(request={"name": secret_name})
+    return response.payload.data.decode("UTF-8")
 
 def store_event(data):
     event_id = data["id"]
@@ -65,26 +71,56 @@ def webhook(request):
     if request.method == 'POST':
         data = json.loads(request.data)
 
-        event_data = {
-            'id': data['id'],
-            'event': data['event'],
-            'space': data['space'],
-            'expire': data['expire']
-        }
+        # Check if the webhook payload contains a 'secret' field and compare it to the provided secret token
+        if 'secret' in data and data['secret'] == get_secret_value("SNAPSHOT_WEBHOOK_SECRET"):
 
-        # Fetch the additional proposal data
-        proposal_id = event_data['id'].split('/')[-1]
-        
-        try:
-            proposal_data = fetch_proposal_data(proposal_id)
-        except Exception as e:
-            return jsonify({"status": "error", "message": f"Error fetching proposal data: {str(e)}"})
+            event_data = {
+                'id': data['id'],
+                'event': data['event'],
+                'space': data['space'],
+                'expire': data['expire']
+            }
 
-        # Merge the event data and the proposal data
-        merged_data = {**event_data, **proposal_data}
+            # Fetch the additional proposal data
+            proposal_id = event_data['id'].split('/')[-1]
+            
+            try:
+                proposal_data = fetch_proposal_data(proposal_id)
+            except Exception as e:
+                return jsonify({"status": "error", "message": f"Error fetching proposal data: {str(e)}"})
 
-        # Store the merged data in Firestore
-        event_id = store_event(merged_data)
+            # Merge the event data and the proposal data
+            merged_data = {**event_data, **proposal_data}
+
+            # Get summary of the proposal body field using OpenAI
+            openai.api_key = get_secret_value("OPENAI_API_KEY")
+            for i in range(3):
+                try:
+                    body = merged_data["body"]
+                    response = openai.Completion.create(
+                        model="text-davinci-003",
+                        prompt="Provide a concise summary of the given content, using no more than 100 words, while accurately conveying its main points and ideas.\n\n" + body,
+                        temperature=0,
+                        max_tokens=1000,
+                        top_p=1,
+                        frequency_penalty=0,
+                        presence_penalty=0
+                    )
+                    summary = response.choices[0].text.strip()
+
+                    # Store the merged data and the summary in Firestore
+                    merged_data["summary"] = summary
+                    event_id = store_event(merged_data)
+                    return jsonify({"status": "OK"})
+
+                except Exception as e:
+                    if i < 2:
+                        # If the OpenAI request fails, retry after a short delay
+                        time.sleep(2)
+                    else:
+                        # If the OpenAI request fails 3 times, return an error response
+                        return jsonify({"status": "error", "message": f"Error generating summary: {str(e)}"})
 
         return jsonify({"status": "OK"})
-
+    else:
+        return jsonify({"status": "error", "message": "Invalid secret token"})
