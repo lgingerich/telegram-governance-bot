@@ -17,8 +17,16 @@ def start(update: Update, context: CallbackContext):
     update.message.reply_text(
         "Welcome to the Crypto Governance Event Notifications bot!\n\n"
         "Subscribe to be notified of governance proposal actions in real-time. "
-        "Notifications can be set for specific projects, keywords, and proposal events (created, started, ended, deleted)."
-        "Here's some tips to get started."
+        "Notifications can be set for specific projects, keywords, and proposal events (created, started, ended, deleted). "
+        "Here are some commands to get started. \n\n"
+        "/subscribe - Subscribe to projects and keywords\n"
+        "    To subscribe to projects: /subscribe project project1 project2\n"
+        "    To subscribe to keywords: /subscribe keyword keyword1 keyword2\n"
+        "/unsubscribe - Unsubscribe from projects and keywords\n"
+        "    To unsubscribe from projects: /unsubscribe project project1 project2\n"
+        "    To unsubscribe from keywords: /unsubscribe keyword keyword1 keyword2\n"
+        "/list_subscriptions - List your current subscriptions\n"
+        "/help - Show the help message"
     )
 
 def subscribe(update: Update, context: CallbackContext):
@@ -52,54 +60,98 @@ def subscribe(update: Update, context: CallbackContext):
     # Check document existence
     doc = user_doc_ref.get()
     if not doc.exists:
-        # Document doesn't exist, create it with the provided keywords and projects
+        # Document doesn't exist
         user_doc_ref.set(
             {
                 "keywords": keywords,
                 "projects": projects
             }
         )
+
+        response = ""
+        if projects:
+            if len(projects) == 1:
+                response += f"Successfully subscribed to project: {projects[0]}\n"
+            else:
+                response += f"Successfully subscribed to projects: {', '.join(projects)}\n"
+        if keywords:
+            if len(keywords) == 1:
+                response += f"Successfully subscribed to keyword: {keywords[0]}\n"
+            else:
+                response += f"Successfully subscribed to keywords: {', '.join(keywords)}"
+
+        update.message.reply_text(response)
     else:
-        # Document exists, update the keywords and projects
-        user_doc_ref.update(
-            {
-                "keywords": firestore.ArrayUnion(keywords),
-                "projects": firestore.ArrayUnion(projects)
-            }
-        )
+        # Document exists
+        existing_projects = doc.get("projects")
+        existing_keywords = doc.get("keywords")
 
-    response = ""
-    if projects:
-        if len(projects) == 1:
-            response += f"Successfully subscribed to project: {projects[0]}\n"
-        else:
-            response += f"Successfully subscribed to projects: {', '.join(projects)}\n"
-    if keywords:
-        if len(keywords) == 1:
-            response += f"Successfully subscribed to keyword: {keywords[0]}\n"
-        else:
-            response += f"Successfully subscribed to keywords: {', '.join(keywords)}"
+        if existing_projects is None:
+            existing_projects = []
+        if existing_keywords is None:
+            existing_keywords = []
 
-    update.message.reply_text(response)
+        new_projects = list(set(projects) - set(existing_projects))
+        new_keywords = list(set(keywords) - set(existing_keywords))
+        already_subscribed_projects = list(set(projects) & set(existing_projects))
+        already_subscribed_keywords = list(set(keywords) & set(existing_keywords))
 
+        response = ""
+
+        if new_projects:
+            user_doc_ref.update(
+                {
+                    "projects": firestore.ArrayUnion(new_projects)
+                }
+            )
+            if len(new_projects) == 1:
+                response += f"Successfully subscribed to project: {new_projects[0]}\n"
+            else:
+                response += f"Successfully subscribed to projects: {', '.join(new_projects)}\n"
+
+        if new_keywords:
+            user_doc_ref.update(
+                {
+                    "keywords": firestore.ArrayUnion(new_keywords)
+                }
+            )
+            if len(new_keywords) == 1:
+                response += f"Successfully subscribed to keyword: {new_keywords[0]}\n"
+            else:
+                response += f"Successfully subscribed to keywords: {', '.join(new_keywords)}\n"
+
+        if already_subscribed_projects:
+            if len(already_subscribed_projects) == 1:
+                response += f"You are already subscribed to project: {already_subscribed_projects[0]}\n"
+            else:
+                response += f"You are already subscribed to projects: {', '.join(already_subscribed_projects)}\n"
+
+        if already_subscribed_keywords:
+            if len(already_subscribed_keywords) == 1:
+                response += f"You are already subscribed to keyword: {already_subscribed_keywords[0]}\n"
+            else:
+                response += f"You are already subscribed to keywords: {', '.join(already_subscribed_keywords)}\n"
+
+        update.message.reply_text(response)
 
 
 def unsubscribe(update: Update, context: CallbackContext):
     user_id = str(update.effective_user.id)
     args = context.args
-
-    if not args:
-        update.message.reply_text("Please provide a project or keyword.")
-        return
-
     projects = []
     keywords = []
 
-    for arg in args:
-        if arg.startswith("project"):
-            projects.extend(arg.split()[1:])
-        elif arg.startswith("keyword"):
-            keywords.extend(arg.split()[1:])
+    if len(args) < 2:
+        update.message.reply_text("Please provide a project or keyword.")
+        return
+
+    if args[0] == "keyword":
+        keywords.extend(args[1:])
+    elif args[0] == "project":
+        projects.extend(args[1:])
+    else:
+        update.message.reply_text("Please provide a project or keyword.")
+        return
 
     if not projects and not keywords:
         update.message.reply_text("Please provide a project or keyword.")
@@ -111,35 +163,48 @@ def unsubscribe(update: Update, context: CallbackContext):
     # Firestore document reference for the user
     user_doc_ref = db.collection("user_subscriptions").document(user_id)
 
-    # Remove projects
-    if projects:
-        for project in projects:
-            project_doc_ref = user_doc_ref.collection("projects").document(project)
-            project_doc_ref.delete()
+    # Check document existence
+    doc = user_doc_ref.get()
+    if not doc.exists:
+        update.message.reply_text("You are not subscribed to any projects or keywords.")
+        return
 
-    # Remove keywords
-    if keywords:
-        for keyword in keywords:
-            keyword_doc_ref = user_doc_ref.collection("keywords").document(keyword)
-            keyword_doc_ref.delete()
+    existing_projects = doc.get("projects")
+    existing_keywords = doc.get("keywords")
+
+    if existing_projects is None:
+        existing_projects = []
+    if existing_keywords is None:
+        existing_keywords = []
 
     response = ""
-    if projects:
-        if len(projects) == 1:
-            response += f"Successfully unsubscribed from project: {projects[0]}\n"
+
+    for project in projects:
+        if project in existing_projects:
+            user_doc_ref.update(
+                {
+                    "projects": firestore.ArrayRemove([project])
+                }
+            )
+            response += f"Successfully unsubscribed from project: {project}\n"
         else:
-            response += f"Successfully unsubscribed from projects: {', '.join(projects)}\n"
-    if keywords:
-        if len(keywords) == 1:
-            response += f"Successfully unsubscribed from keyword: {keywords[0]}\n"
+            response += f"You are not subscribed to project: {project}\n"
+
+    for keyword in keywords:
+        if keyword in existing_keywords:
+            user_doc_ref.update(
+                {
+                    "keywords": firestore.ArrayRemove([keyword])
+                }
+            )
+            response += f"Successfully unsubscribed from keyword: {keyword}\n"
         else:
-            response += f"Successfully unsubscribed from keywords: {', '.join(keywords)}"
+            response += f"You are not subscribed to keyword: {keyword}\n"
 
     update.message.reply_text(response)
 
 
-
-def list_subscriptions(update: Update, context):
+def list_subscriptions(update: Update, context: CallbackContext):
     user_id = str(update.effective_user.id)
 
     # Initialize Firestore
@@ -148,12 +213,15 @@ def list_subscriptions(update: Update, context):
     # Firestore document reference for the user
     user_doc_ref = db.collection("user_subscriptions").document(user_id)
 
-    # Retrieve projects and keywords from Firestore
-    projects_snapshot = user_doc_ref.collection("projects").stream()
-    keywords_snapshot = user_doc_ref.collection("keywords").stream()
+    # Retrieve user subscriptions from Firestore
+    doc = user_doc_ref.get()
+    if not doc.exists:
+        update.message.reply_text("You have no subscriptions.")
+        return
 
-    projects = [project.id for project in projects_snapshot]
-    keywords = [keyword.id for keyword in keywords_snapshot]
+    data = doc.to_dict()
+    projects = data.get("projects", [])
+    keywords = data.get("keywords", [])
 
     response = ""
     if projects:
@@ -199,4 +267,3 @@ def index() -> Response:
         Update.de_json(request.get_json(force=True), bot))
 
     return "", http.HTTPStatus.NO_CONTENT
-
