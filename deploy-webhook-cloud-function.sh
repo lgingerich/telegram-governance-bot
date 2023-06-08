@@ -1,4 +1,4 @@
-#!/bin/bash -xe
+#!/bin/bash
 
 gcloud functions deploy snapshot_webhook \
   --gen2 \
