@@ -1,7 +1,21 @@
 from google.cloud import firestore
+from google.cloud import pubsub_v1
+import json
 
 # Initialize Firestore client
 db = firestore.Client()
+
+# Initialize Publisher client
+publisher = pubsub_v1.PublisherClient()
+topic_path = publisher.topic_path('telegram-governance-bot', 'matched-events-topic')
+
+# Function to publish a matched event
+def publish_matched_event(matched_event):
+    data = json.dumps(matched_event)
+    data = data.encode("utf-8")
+
+    future = publisher.publish(topic_path, data)
+    print(f"Published message: {future.result()}")
 
 def monitor_snapshot_events(data, context):
     # Get event data from the snapshot
@@ -41,5 +55,8 @@ def monitor_snapshot_events(data, context):
             "event_data": event_data,
             "matched_users": matched_users,
         }
-        
+
         db.collection("matched_events").document().set(matched_event_data)
+
+        # Publish the matched event to Pub/Sub
+        publish_matched_event(matched_event_data)
