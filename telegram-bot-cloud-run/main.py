@@ -1,17 +1,21 @@
 import os
 import http
-from google.cloud import pubsub_v1, firestore
+import json
+import base64
+from google.cloud import firestore
 from flask import Flask, request
 from werkzeug.wrappers import Response
-
 from telegram import Bot, Update
-from telegram.ext import Dispatcher, Filters, MessageHandler, CallbackContext, CommandHandler
-
+from telegram.ext import (
+    Dispatcher,
+    Filters,
+    MessageHandler,
+    CallbackContext,
+    CommandHandler,
+)
 
 app = Flask(__name__)
 
-# Initialize the Pub/Sub client
-publisher = pubsub_v1.PublisherClient()
 
 def start(update: Update, context: CallbackContext):
     update.message.reply_text(
@@ -28,6 +32,7 @@ def start(update: Update, context: CallbackContext):
         "/list_subscriptions - List your current subscriptions\n"
         "/help - Show the help message"
     )
+
 
 def subscribe(update: Update, context: CallbackContext):
     user_id = str(update.effective_user.id)
@@ -61,24 +66,23 @@ def subscribe(update: Update, context: CallbackContext):
     doc = user_doc_ref.get()
     if not doc.exists:
         # Document doesn't exist
-        user_doc_ref.set(
-            {
-                "keywords": keywords,
-                "projects": projects
-            }
-        )
+        user_doc_ref.set({"keywords": keywords, "projects": projects})
 
         response = ""
         if projects:
             if len(projects) == 1:
                 response += f"Successfully subscribed to project: {projects[0]}\n"
             else:
-                response += f"Successfully subscribed to projects: {', '.join(projects)}\n"
+                response += (
+                    f"Successfully subscribed to projects: {', '.join(projects)}\n"
+                )
         if keywords:
             if len(keywords) == 1:
                 response += f"Successfully subscribed to keyword: {keywords[0]}\n"
             else:
-                response += f"Successfully subscribed to keywords: {', '.join(keywords)}"
+                response += (
+                    f"Successfully subscribed to keywords: {', '.join(keywords)}"
+                )
 
         update.message.reply_text(response)
     else:
@@ -99,26 +103,22 @@ def subscribe(update: Update, context: CallbackContext):
         response = ""
 
         if new_projects:
-            user_doc_ref.update(
-                {
-                    "projects": firestore.ArrayUnion(new_projects)
-                }
-            )
+            user_doc_ref.update({"projects": firestore.ArrayUnion(new_projects)})
             if len(new_projects) == 1:
                 response += f"Successfully subscribed to project: {new_projects[0]}\n"
             else:
-                response += f"Successfully subscribed to projects: {', '.join(new_projects)}\n"
+                response += (
+                    f"Successfully subscribed to projects: {', '.join(new_projects)}\n"
+                )
 
         if new_keywords:
-            user_doc_ref.update(
-                {
-                    "keywords": firestore.ArrayUnion(new_keywords)
-                }
-            )
+            user_doc_ref.update({"keywords": firestore.ArrayUnion(new_keywords)})
             if len(new_keywords) == 1:
                 response += f"Successfully subscribed to keyword: {new_keywords[0]}\n"
             else:
-                response += f"Successfully subscribed to keywords: {', '.join(new_keywords)}\n"
+                response += (
+                    f"Successfully subscribed to keywords: {', '.join(new_keywords)}\n"
+                )
 
         if already_subscribed_projects:
             if len(already_subscribed_projects) == 1:
@@ -181,22 +181,14 @@ def unsubscribe(update: Update, context: CallbackContext):
 
     for project in projects:
         if project in existing_projects:
-            user_doc_ref.update(
-                {
-                    "projects": firestore.ArrayRemove([project])
-                }
-            )
+            user_doc_ref.update({"projects": firestore.ArrayRemove([project])})
             response += f"Successfully unsubscribed from project: {project}\n"
         else:
             response += f"You are not subscribed to project: {project}\n"
 
     for keyword in keywords:
         if keyword in existing_keywords:
-            user_doc_ref.update(
-                {
-                    "keywords": firestore.ArrayRemove([keyword])
-                }
-            )
+            user_doc_ref.update({"keywords": firestore.ArrayRemove([keyword])})
             response += f"Successfully unsubscribed from keyword: {keyword}\n"
         else:
             response += f"You are not subscribed to keyword: {keyword}\n"
@@ -250,7 +242,35 @@ def help_command(update: Update, context: CallbackContext):
 
     update.message.reply_text(help_text)
 
+def process_pubsub_message(pubsub_message: dict):
+    if isinstance(pubsub_message, dict) and "data" in pubsub_message:
+        message = base64.b64decode(pubsub_message["data"]).decode("utf-8").strip()
 
+        # Assuming message is a JSON string
+        return json.loads(message)
+    else:
+        return None
+
+
+def send_telegram_message(message_json: dict):
+    # Initialize Firestore
+    db = firestore.Client()
+    
+    # Send a message to the user with the new event for each matched user
+    for user_id, sent_status in message_json["matched_users"].items():
+        # Only send the message if it hasn't been sent to this user yet
+        if not sent_status:
+            try:
+                bot.send_message(
+                    chat_id=user_id,
+                    text=f"New matched event: {message_json['event_data']}",
+                )  # Assuming you want to send the event_data to the user
+
+                # Assuming you want to update the sent_status in Firestore to True
+                db.collection("matched_events").document(message_json['id']).update({f"matched_users.{user_id}": True})
+
+            except Exception as e:
+                print(f"Failed to send message to user {user_id}: {e}")
 
 bot = Bot(token=os.environ["TOKEN"])
 dispatcher = Dispatcher(bot=bot, update_queue=None)
@@ -261,9 +281,31 @@ dispatcher.add_handler(CommandHandler("unsubscribe", unsubscribe))
 dispatcher.add_handler(CommandHandler("list_subscriptions", list_subscriptions))
 dispatcher.add_handler(CommandHandler("help", help_command))
 
+
 @app.post("/")
 def index() -> Response:
-    dispatcher.process_update(
-        Update.de_json(request.get_json(force=True), bot))
+    dispatcher.process_update(Update.de_json(request.get_json(force=True), bot))
 
     return "", http.HTTPStatus.NO_CONTENT
+
+
+@app.post("/pubsub")
+def pubsub_endpoint():
+    envelope = request.get_json()
+    if not envelope:
+        msg = "no Pub/Sub message received"
+        print(f"error: {msg}")
+        return "Bad Request: " + msg, 400
+
+    if not isinstance(envelope, dict) or "message" not in envelope:
+        msg = "invalid Pub/Sub message format"
+        print(f"error: {msg}")
+        return "Bad Request: " + msg, 400
+
+    pubsub_message = envelope["message"]
+    message_json = process_pubsub_message(pubsub_message)
+
+    if message_json:
+        send_telegram_message(message_json)
+
+    return '', 204
