@@ -2,6 +2,7 @@ import os
 import http
 import json
 import base64
+from datetime import datetime
 from google.cloud import firestore
 from flask import Flask, request
 from werkzeug.wrappers import Response
@@ -242,6 +243,7 @@ def help_command(update: Update, context: CallbackContext):
 
     update.message.reply_text(help_text)
 
+
 def process_pubsub_message(pubsub_message: dict):
     if isinstance(pubsub_message, dict) and "data" in pubsub_message:
         message = base64.b64decode(pubsub_message["data"]).decode("utf-8").strip()
@@ -252,25 +254,71 @@ def process_pubsub_message(pubsub_message: dict):
         return None
 
 
+def format_event(event_data):
+    title = event_data.get('title', {}).get('stringValue')
+    body = event_data.get('body', {}).get('stringValue')
+    start = event_data.get('start', {}).get('integerValue')
+    end = event_data.get('end', {}).get('integerValue')
+    space_map = event_data.get('space', {}).get('mapValue', {}).get('fields', {})
+    space_name = space_map.get('name', {}).get('stringValue')
+    space_id = space_map.get('id', {}).get('stringValue')
+    event_id = event_data.get('id', {}).get('stringValue')
+
+    # Get choices and join them into a single string
+    choices_list = event_data.get('choices', {}).get('arrayValue', {}).get('values', [])
+    choices = ", ".join([choice.get('stringValue', '') for choice in choices_list])
+
+    formatted_event = {
+        'title': title,
+        'body': body,
+        'start': start,
+        'end': end,
+        'space_name': space_name,
+        'choices': choices,
+        'space_id': space_id,
+        'event_id': event_id,
+    }
+    print(formatted_event)
+    
+    return formatted_event
+
+
 def send_telegram_message(message_json: dict):
     # Initialize Firestore
     db = firestore.Client()
-    
+
     # Send a message to the user with the new event for each matched user
     for user_id, sent_status in message_json["matched_users"].items():
         # Only send the message if it hasn't been sent to this user yet
         if not sent_status:
             try:
-                bot.send_message(
-                    chat_id=user_id,
-                    text=f"New matched event: {message_json['event_data']}",
-                )  # Assuming you want to send the event_data to the user
+                event = format_event(message_json["event_data"])
+                
+                start_time = datetime.utcfromtimestamp(int(event['start'])).strftime("%Y-%m-%d %H:%M")
+                end_time = datetime.utcfromtimestamp(int(event['end'])).strftime("%Y-%m-%d %H:%M")
+
+                # Create a hyperlink for the title
+                title_url = f"https://snapshot.org/#/{event['space_id']}/proposal/{event['event_id']}"
+                title_with_link = f"[{event['title']}]({title_url})"
+            
+                message = (
+                    f"Proposal Created:\n"
+                    f"Title: {title_with_link}\n"
+                    f"Space: {event['space_name']}\n"
+                    f"Summary: {event['body']}\n"
+                    f"Choices: {event['choices']}\n"
+                    f"Start: {start_time} UTC\n"
+                    f"End: {end_time} UTC"
+                )
+
+                bot.send_message(chat_id=user_id, text=message, parse_mode='Markdown')
 
                 # Assuming you want to update the sent_status in Firestore to True
                 db.collection("matched_events").document(message_json['id']).update({f"matched_users.{user_id}": True})
 
             except Exception as e:
                 print(f"Failed to send message to user {user_id}: {e}")
+                                    
 
 bot = Bot(token=os.environ["TOKEN"])
 dispatcher = Dispatcher(bot=bot, update_queue=None)
