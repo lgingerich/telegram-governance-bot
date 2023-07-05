@@ -105,36 +105,6 @@ def webhook(request):
             # Store the merged data in Firestore
             event_id = store_event(merged_data)
 
-            # Get summary of the proposal body field using OpenAI
-            # openai.api_key = get_secret_value("OPENAI_API_KEY")
-
-            # for i in range(3):
-            #     try:
-            #         body = merged_data["body"]
-            #         response = openai.Completion.create(
-            #             model="text-davinci-003",
-            #             prompt="Provide a concise summary of the given content, using no more than 100 words, while accurately conveying its main points and ideas.\n\n" + body,
-            #             temperature=0,
-            #             max_tokens=1000,
-            #             top_p=1,
-            #             frequency_penalty=0,
-            #             presence_penalty=0
-            #         )
-            #         summary = response.choices[0].text.strip()
-
-            #         # Store the merged data and the summary in Firestore
-            #         merged_data["summary"] = summary
-            #         event_id = store_event(merged_data)
-            #         return jsonify({"status": "OK"})
-
-            #     except Exception as e:
-            #         if i < 2:
-            #             # If the OpenAI request fails, retry after a short delay
-            #             time.sleep(2)
-            #         else:
-            #             # If the OpenAI request fails 3 times, return an error response
-            #             return jsonify({"status": "error", "message": f"Error generating summary: {str(e)}"})
-
         return jsonify({"status": "OK"})
     else:
         return jsonify({"status": "error", "message": "Invalid secret token"})
