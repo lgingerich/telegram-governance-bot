@@ -26,14 +26,16 @@ def start(update: Update, context: CallbackContext):
         "Subscribe to be notified of governance proposal actions in real-time. "
         "Notifications can be set for specific projects, keywords, and proposal events (created, started, ended, deleted). "
         "Here are some commands to get started. \n\n"
-        "/subscribe - Subscribe to projects and keywords\n"
+        "/subscribe - Subscribe to projects, keywords, and token tickers\n"
         "    To subscribe to projects: /subscribe project project1 project2\n"
         "    To subscribe to keywords: /subscribe keyword keyword1 keyword2\n"
-        "/unsubscribe - Unsubscribe from projects and keywords\n"
+        "    To subscribe to token tickers: /subscribe ticker\n"
+        "/unsubscribe - Unsubscribe from projects, keywords, and token tickers\n"
         "    To unsubscribe from projects: /unsubscribe project project1 project2\n"
         "    To unsubscribe from keywords: /unsubscribe keyword keyword1 keyword2\n"
+        "    To unsubscribe from token tickers: /unsubscribe ticker\n"
         "/list_subscriptions - List your current subscriptions\n"
-        "/help - Show the help message"
+        "/help - Show this help message"
     )
 
 
@@ -42,21 +44,24 @@ def subscribe(update: Update, context: CallbackContext):
     args = context.args
     projects = []
     keywords = []
+    ticker_subscription = None
 
-    if len(args) < 2:
-        update.message.reply_text("Please provide a project or keyword.")
+    if len(args) < 1:
+        update.message.reply_text("Please provide a project, keyword, or ticker.")
         return
 
     if args[0] == "keyword":
         keywords.extend(args[1:])
     elif args[0] == "project":
         projects.extend(args[1:])
+    elif args[0] == "ticker":
+        ticker_subscription = True
     else:
-        update.message.reply_text("Please provide a project or keyword.")
+        update.message.reply_text("Please provide a project, keyword, or ticker.")
         return
 
-    if not projects and not keywords:
-        update.message.reply_text("Please provide a project or keyword.")
+    if not projects and not keywords and ticker_subscription is None:
+        update.message.reply_text("Please provide a project, keyword, or ticker.")
         return
 
     # Initialize Firestore
@@ -69,7 +74,7 @@ def subscribe(update: Update, context: CallbackContext):
     doc = user_doc_ref.get()
     if not doc.exists:
         # Document doesn't exist
-        user_doc_ref.set({"keywords": keywords, "projects": projects})
+        user_doc_ref.set({"keywords": keywords, "projects": projects, "tickers": ticker_subscription})
 
         response = ""
         if projects:
@@ -84,14 +89,17 @@ def subscribe(update: Update, context: CallbackContext):
                 response += f"Successfully subscribed to keyword: {keywords[0]}\n"
             else:
                 response += (
-                    f"Successfully subscribed to keywords: {', '.join(keywords)}"
+                    f"Successfully subscribed to keywords: {', '.join(keywords)}\n"
                 )
+        if ticker_subscription is not None:
+            response += f"Successfully subscribed to ticker notifications."
 
         update.message.reply_text(response)
     else:
         # Document exists
         existing_projects = doc.get("projects")
         existing_keywords = doc.get("keywords")
+        already_subscribed_tickers = doc.get("tickers")
 
         if existing_projects is None:
             existing_projects = []
@@ -123,6 +131,12 @@ def subscribe(update: Update, context: CallbackContext):
                     f"Successfully subscribed to keywords: {', '.join(new_keywords)}\n"
                 )
 
+        if ticker_subscription is not None and not already_subscribed_tickers:
+            user_doc_ref.update({"tickers": ticker_subscription})
+            response += f"Successfully subscribed to ticker notifications.\n"
+        elif ticker_subscription is not None and already_subscribed_tickers:
+            response += "You are already subscribed to ticker notifications.\n"
+
         if already_subscribed_projects:
             if len(already_subscribed_projects) == 1:
                 response += f"You are already subscribed to project: {already_subscribed_projects[0]}\n"
@@ -143,21 +157,24 @@ def unsubscribe(update: Update, context: CallbackContext):
     args = context.args
     projects = []
     keywords = []
+    ticker_subscription = None
 
-    if len(args) < 2:
-        update.message.reply_text("Please provide a project or keyword.")
+    if len(args) < 1:
+        update.message.reply_text("Please provide a project, keyword, or ticker.")
         return
 
     if args[0] == "keyword":
         keywords.extend(args[1:])
     elif args[0] == "project":
         projects.extend(args[1:])
+    elif args[0] == "ticker":
+        ticker_subscription = False
     else:
-        update.message.reply_text("Please provide a project or keyword.")
+        update.message.reply_text("Please provide a project, keyword, or ticker.")
         return
 
-    if not projects and not keywords:
-        update.message.reply_text("Please provide a project or keyword.")
+    if not projects and not keywords and ticker_subscription is None:
+        update.message.reply_text("Please provide a project, keyword, or ticker.")
         return
 
     # Initialize Firestore
@@ -169,11 +186,12 @@ def unsubscribe(update: Update, context: CallbackContext):
     # Check document existence
     doc = user_doc_ref.get()
     if not doc.exists:
-        update.message.reply_text("You are not subscribed to any projects or keywords.")
+        update.message.reply_text("You are not subscribed to any projects, keywords or tickers.")
         return
 
     existing_projects = doc.get("projects")
     existing_keywords = doc.get("keywords")
+    already_subscribed_tickers = doc.get("tickers")
 
     if existing_projects is None:
         existing_projects = []
@@ -196,6 +214,12 @@ def unsubscribe(update: Update, context: CallbackContext):
         else:
             response += f"You are not subscribed to keyword: {keyword}\n"
 
+    if ticker_subscription is not None and already_subscribed_tickers:
+        user_doc_ref.update({"tickers": ticker_subscription})
+        response += "Successfully unsubscribed from ticker notifications.\n"
+    elif ticker_subscription is not None and not already_subscribed_tickers:
+        response += "You are not subscribed to ticker notifications.\n"
+
     update.message.reply_text(response)
 
 
@@ -217,13 +241,16 @@ def list_subscriptions(update: Update, context: CallbackContext):
     data = doc.to_dict()
     projects = data.get("projects", [])
     keywords = data.get("keywords", [])
+    tickers = data.get("tickers", None)
 
     response = ""
     if projects:
         response += f"Your current project subscriptions: {', '.join(projects)}\n"
     if keywords:
         response += f"Your current keyword subscriptions: {', '.join(keywords)}\n"
-    if not projects and not keywords:
+    if tickers:
+        response += "You are currently subscribed to ticker notifications.\n"
+    if not projects and not keywords and not tickers:
         response = "You have no subscriptions."
 
     update.message.reply_text(response)
@@ -233,12 +260,14 @@ def help_command(update: Update, context: CallbackContext):
     help_text = (
         "Available commands:\n\n"
         "/start - Start the bot and get some tips\n"
-        "/subscribe - Subscribe to projects and keywords\n"
+        "/subscribe - Subscribe to projects, keywords, and token tickers\n"
         "    To subscribe to projects: /subscribe project project1 project2\n"
         "    To subscribe to keywords: /subscribe keyword keyword1 keyword2\n"
-        "/unsubscribe - Unsubscribe from projects and keywords\n"
+        "    To subscribe to token tickers: /subscribe ticker\n"
+        "/unsubscribe - Unsubscribe from projects, keywords, and token tickers\n"
         "    To unsubscribe from projects: /unsubscribe project project1 project2\n"
         "    To unsubscribe from keywords: /unsubscribe keyword keyword1 keyword2\n"
+        "    To unsubscribe from token tickers: /unsubscribe ticker\n"
         "/list_subscriptions - List your current subscriptions\n"
         "/help - Show this help message"
     )
@@ -281,7 +310,7 @@ def get_openai_summary(body):
                 presence_penalty=0
             )
             summary = response.choices[0].text.strip()
-            print("summary = ", summary)
+
             return summary
 
         except Exception as e:
@@ -291,6 +320,7 @@ def get_openai_summary(body):
             else:
                 # If the OpenAI request fails 3 times, return an error response
                 return f"Error generating summary: {str(e)}"
+
 
 def format_event(event_data):
     title = event_data.get('title', {}).get('stringValue')
@@ -318,7 +348,7 @@ def format_event(event_data):
         'space_id': space_id,
         'event_id': event_id,
     }
-    print(formatted_event)
+    print("formatted_event = ", formatted_event)
     
     return formatted_event
 

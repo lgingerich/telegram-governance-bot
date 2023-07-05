@@ -1,6 +1,7 @@
 from google.cloud import firestore
 from google.cloud import pubsub_v1
 import json
+import re
 
 # Initialize Firestore client
 db = firestore.Client()
@@ -8,6 +9,9 @@ db = firestore.Client()
 # Initialize Publisher client
 publisher = pubsub_v1.PublisherClient()
 topic_path = publisher.topic_path("telegram-governance-bot", "matched-events-topic")
+
+# Regex to match 3-5 uppercase letters. Used to match tickers
+TOKEN_TICKER_REGEX = r'\b[A-Z]{3,5}\b'
 
 
 # Function to publish a matched event
@@ -19,6 +23,7 @@ def publish_matched_event(matched_event):
     print(f"Published message: {future.result()}")
 
 
+
 def monitor_snapshot_events(data, context):
     # Get event data from the snapshot
     event_data = data["value"]["fields"]
@@ -28,27 +33,39 @@ def monitor_snapshot_events(data, context):
     event_body_text = event_data["body"]["stringValue"].lower()  # Convert to lower case for case-insensitive matching
     event_title_text = event_data["title"]["stringValue"].lower()  # Convert to lower case for case-insensitive matching
 
-    # Initialize an array to hold all matching user IDs
-    matched_users = []
+    # Get all potential tickers in body and title text
+    body_text_tickers = re.findall(TOKEN_TICKER_REGEX, event_body_text.upper())
+    title_text_tickers = re.findall(TOKEN_TICKER_REGEX, event_title_text.upper())
+    event_tickers = set(body_text_tickers + title_text_tickers)  # Combine and remove duplicates
+
+    # Initialize a set to hold all matching user IDs
+    matched_users = set()
 
     # Fetch all user subscriptions
     user_subscriptions_ref = db.collection("user_subscriptions")
     user_subscriptions_docs = user_subscriptions_ref.stream()
 
-    # Loop through user subscriptions and check if project ID or any keyword matches
+    # Loop through user subscriptions and check if project ID, any keyword, or any ticker matches
     for doc in user_subscriptions_docs:
         user_subscription = doc.to_dict()
 
         # Check if the event's project ID is in the user's subscription projects
-        if ("projects" in user_subscription and event_project_id in user_subscription["projects"]):
-            matched_users.append(doc.id)  # doc.id contains the user id (telegram id)
-        else:
-            # Check if any of the user's keywords is in the body or title text
-            if "keywords" in user_subscription:
-                for keyword in user_subscription["keywords"]:
-                    if (keyword.lower() in event_body_text or keyword.lower() in event_title_text):  # Convert to lower case for case-insensitive matching
-                        matched_users.append(doc.id)  # doc.id contains the user id (telegram id)
-                        break  # Stop checking other keywords once a match is found
+        if "projects" in user_subscription and event_project_id in user_subscription["projects"]:
+            matched_users.add(doc.id)
+
+        # Check if any of the user's keywords is in the body or title text
+        if "keywords" in user_subscription:
+            for keyword in user_subscription["keywords"]:
+                if keyword.lower() in event_body_text or keyword.lower() in event_title_text:
+                    matched_users.add(doc.id)
+                    break  # Stop checking other keywords once a match is found
+
+        # Check if any of the event's tickers are in the user's subscription tickers
+        if "tickers" in user_subscription:
+            for ticker in user_subscription["tickers"]:
+                if ticker in event_tickers:
+                    matched_users.add(doc.id)
+                    break  # Stop checking other tickers once a match is found
 
     # Check if there were any matches
     if matched_users:
