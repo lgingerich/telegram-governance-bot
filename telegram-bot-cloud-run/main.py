@@ -2,8 +2,10 @@ import os
 import http
 import json
 import base64
+import time
+import openai
 from datetime import datetime
-from google.cloud import firestore
+from google.cloud import firestore, secretmanager
 from flask import Flask, request
 from werkzeug.wrappers import Response
 from telegram import Bot, Update
@@ -244,6 +246,15 @@ def help_command(update: Update, context: CallbackContext):
     update.message.reply_text(help_text)
 
 
+def get_secret_value(secret_name, version_id="latest"):
+    # GCP project id
+    project_id = 'telegram-governance-bot'
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{project_id}/secrets/{secret_name}/versions/{version_id}"
+    response = client.access_secret_version(request={"name": name})
+    return response.payload.data.decode("UTF-8")
+
+
 def process_pubsub_message(pubsub_message: dict):
     if isinstance(pubsub_message, dict) and "data" in pubsub_message:
         message = base64.b64decode(pubsub_message["data"]).decode("utf-8").strip()
@@ -252,7 +263,34 @@ def process_pubsub_message(pubsub_message: dict):
         return json.loads(message)
     else:
         return None
+    
 
+def get_openai_summary(body):
+    # Get summary of the proposal body field using OpenAI
+    openai.api_key = get_secret_value("OPENAI_API_KEY")
+
+    for i in range(3):
+        try:
+            response = openai.Completion.create(
+                model="text-davinci-003",
+                prompt="Provide a concise summary of the given content, using no more than 100 words, while accurately conveying its main points and ideas.\n\n" + body,
+                temperature=0,
+                max_tokens=1000,
+                top_p=1,
+                frequency_penalty=0,
+                presence_penalty=0
+            )
+            summary = response.choices[0].text.strip()
+            print("summary = ", summary)
+            return summary
+
+        except Exception as e:
+            if i < 2:
+                # If the OpenAI request fails, retry after a short delay
+                time.sleep(2)
+            else:
+                # If the OpenAI request fails 3 times, return an error response
+                return f"Error generating summary: {str(e)}"
 
 def format_event(event_data):
     title = event_data.get('title', {}).get('stringValue')
@@ -268,9 +306,11 @@ def format_event(event_data):
     choices_list = event_data.get('choices', {}).get('arrayValue', {}).get('values', [])
     choices = ", ".join([choice.get('stringValue', '') for choice in choices_list])
 
+    body_summary = get_openai_summary(body)
+
     formatted_event = {
         'title': title,
-        'body': body,
+        'body': body_summary,
         'start': start,
         'end': end,
         'space_name': space_name,
