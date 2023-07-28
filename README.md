@@ -1,5 +1,7 @@
 # telegram-governance-bot
 
+Telegram bot that allows you to subscribe to projects, keywords, and token tickers, then receive real-time notifications when a new governance proposal is created that matches your active subscriptions. Snapshot is currently the only supported platform.
+
 
 ## Cloud Run Deploy Steps
 1. Set Region 
